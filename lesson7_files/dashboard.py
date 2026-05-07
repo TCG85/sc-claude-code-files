@@ -1,530 +1,420 @@
 """
-E-commerce Business Analytics Dashboard
-A professional Streamlit dashboard for business performance analysis
+dashboard.py
+
+Streamlit e-commerce sales dashboard.
+Run with: streamlit run dashboard.py
 """
 
-import streamlit as st
 import pandas as pd
-import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from datetime import datetime, timedelta
-import warnings
+import streamlit as st
 
-# Import custom modules
-from data_loader import EcommerceDataLoader, load_and_process_data
-from business_metrics import BusinessMetricsCalculator
-
-warnings.filterwarnings('ignore')
-
-# Page configuration
-st.set_page_config(
-    page_title="E-commerce Analytics Dashboard",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="collapsed"
+from data_loader import load_data, build_sales_data, filter_by_period
+from business_metrics import (
+    calculate_avg_order_value,
+    calculate_avg_review_by_delivery,
+    calculate_delivery_metrics,
+    calculate_monthly_growth,
+    calculate_monthly_revenue,
+    calculate_product_sales,
+    calculate_revenue,
+    calculate_revenue_growth,
+    calculate_sales_by_state,
+    calculate_total_orders,
 )
 
-# Custom CSS for professional styling
+# ── Page config ────────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="E-Commerce Dashboard",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+# ── Colour tokens ──────────────────────────────────────────────────────────────
+C = {
+    "primary": "#2C5F8A",
+    "light":   "#A8C8E8",
+    "pos":     "#16a34a",
+    "neg":     "#dc2626",
+    "grid":    "#e2e8f0",
+}
+
+PLOT_BASE = dict(
+    paper_bgcolor="white",
+    plot_bgcolor="#f8fafc",
+    font=dict(family="sans-serif", size=12, color="#374151"),
+    margin=dict(l=16, r=16, t=52, b=16),
+)
+
+# ── CSS ────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    .main > div {
-        padding-top: 2rem;
-    }
-    
-    .metric-card {
-        background: white;
-        padding: 1rem;
-        border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        border: 1px solid #e0e0e0;
-        height: 120px;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-    }
-    
-    .metric-value {
-        font-size: 2rem;
-        font-weight: bold;
-        margin: 0;
-        color: #1f1f1f;
-    }
-    
-    .metric-label {
-        font-size: 0.9rem;
-        color: #666;
-        margin: 0;
-        margin-bottom: 0.5rem;
-    }
-    
-    .metric-trend {
-        font-size: 0.8rem;
-        margin: 0;
-    }
-    
-    .trend-positive {
-        color: #28a745;
-    }
-    
-    .trend-negative {
-        color: #dc3545;
-    }
-    
-    
-    .bottom-card {
-        background: white;
-        padding: 1.5rem;
-        border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        border: 1px solid #e0e0e0;
-        height: 150px;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        text-align: center;
-    }
-    
-    .stSelectbox > div > div > div {
-        background-color: white;
-    }
-    
-    .stars {
-        color: #ffc107;
-        font-size: 1.2rem;
-    }
+/* Collapse empty blocks Streamlit injects after plotly charts */
+div[data-testid="stVerticalBlock"] > div:empty { display: none; }
+div[data-testid="stElementContainer"]:empty    { display: none; }
+
+/* KPI cards */
+.kpi-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 20px 22px;
+    height: 120px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+.kpi-label {
+    font-size: 11px;
+    color: #6b7280;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+}
+.kpi-value {
+    font-size: 30px;
+    font-weight: 700;
+    color: #1e293b;
+    line-height: 1.1;
+}
+.kpi-delta { font-size: 12px; font-weight: 500; }
+
+/* Bottom metric cards */
+.bottom-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 28px 22px;
+    height: 150px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+}
+.bottom-label {
+    font-size: 11px;
+    color: #6b7280;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    margin-bottom: 8px;
+}
+.bottom-value {
+    font-size: 38px;
+    font-weight: 700;
+    color: #1e293b;
+    line-height: 1.1;
+}
+.bottom-delta { font-size: 12px; font-weight: 500; margin-top: 6px; }
+.star-row     { font-size: 20px; color: #f59e0b; margin: 4px 0; letter-spacing: 3px; }
+.bottom-subtitle { font-size: 12px; color: #6b7280; margin-top: 3px; }
 </style>
 """, unsafe_allow_html=True)
 
 
-@st.cache_data
-def load_dashboard_data():
-    """Load and cache data for dashboard"""
-    try:
-        loader, processed_data = load_and_process_data('ecommerce_data/')
-        return loader, processed_data
-    except Exception as e:
-        st.error(f"Error loading data: {str(e)}")
-        return None, None
-
-
-def format_currency(value):
-    """Format currency values with K/M suffixes"""
-    if abs(value) >= 1e6:
-        return f"${value/1e6:.1f}M"
-    elif abs(value) >= 1e3:
-        return f"${value/1e3:.0f}K"
-    else:
-        return f"${value:.0f}"
-
-
-def format_trend(current, previous):
-    """Format trend indicators with arrows and colors"""
-    if previous == 0:
+# ── Utilities ──────────────────────────────────────────────────────────────────
+def fmt_currency(value) -> str:
+    if value is None or pd.isna(value):
         return "N/A"
-    
-    change_pct = ((current - previous) / previous) * 100
-    arrow = "↗" if change_pct > 0 else "↘"
-    color_class = "trend-positive" if change_pct > 0 else "trend-negative"
-    
-    return f'<span class="{color_class}">{arrow} {abs(change_pct):.2f}%</span>'
+    if value >= 1_000_000:
+        return f"${value / 1_000_000:.1f}M"
+    if value >= 1_000:
+        return f"${value / 1_000:.0f}K"
+    return f"${value:.0f}"
 
 
-def create_revenue_trend_chart(current_data, previous_data, current_year, previous_year):
-    """Create revenue trend line chart"""
-    fig = go.Figure()
-    
-    # Check if we have multiple months of data
-    current_months = current_data['purchase_month'].nunique()
-    
-    if current_months > 1:
-        # Multiple months - show monthly trend
-        current_monthly = current_data.groupby('purchase_month')['price'].sum().reset_index()
-        fig.add_trace(go.Scatter(
-            x=current_monthly['purchase_month'],
-            y=current_monthly['price'],
-            mode='lines+markers',
-            name=f'{current_year}',
-            line=dict(color='#1f77b4', width=3),
-            marker=dict(size=8)
-        ))
-        
-        # Previous period line (dashed)
-        if previous_data is not None and not previous_data.empty:
-            previous_monthly = previous_data.groupby('purchase_month')['price'].sum().reset_index()
-            fig.add_trace(go.Scatter(
-                x=previous_monthly['purchase_month'],
-                y=previous_monthly['price'],
-                mode='lines+markers',
-                name=f'{previous_year}',
-                line=dict(color='#ff7f0e', width=3, dash='dash'),
-                marker=dict(size=8)
-            ))
-        
-        fig.update_layout(
-            title="Monthly Revenue Trend",
-            xaxis_title="Month",
-            yaxis_title="Revenue"
-        )
+def fmt_pct(g) -> str:
+    if g is None or pd.isna(g):
+        return "N/A"
+    sign = "+" if g >= 0 else ""
+    return f"{sign}{g * 100:.2f}%"
+
+
+def trend_html(g, comp_label: str, inverted: bool = False, css_class: str = "kpi-delta") -> str:
+    if g is None or pd.isna(g):
+        return ""
+    good = (g < 0) if inverted else (g >= 0)
+    color = C["pos"] if good else C["neg"]
+    arrow = "▼ " if g < 0 else "▲ "
+    return (
+        f'<div class="{css_class}" style="color:{color};">'
+        f"{arrow}{fmt_pct(g)} vs {comp_label}</div>"
+    )
+
+
+def star_rating(score) -> str:
+    if score is None or pd.isna(score):
+        return "☆☆☆☆☆"
+    n = max(0, min(5, round(score)))
+    return "★" * n + "☆" * (5 - n)
+
+
+def make_yticks(values: list) -> tuple[list, list]:
+    clean = [v for v in values if v is not None and not pd.isna(v) and v >= 0]
+    if not clean or max(clean) == 0:
+        return [0], ["$0"]
+    max_val = max(clean)
+    for step in [5_000_000, 2_000_000, 1_000_000, 500_000, 200_000, 100_000,
+                 50_000, 25_000, 10_000, 5_000, 2_000, 1_000, 500]:
+        if max_val / step >= 3:
+            break
     else:
-        # Single month - show daily trend if available, otherwise show comparison bar
-        current_revenue = current_data['price'].sum()
-        previous_revenue = previous_data['price'].sum() if previous_data is not None and not previous_data.empty else 0
-        
-        fig.add_trace(go.Bar(
-            x=[f'{current_year}', f'{previous_year}'],
-            y=[current_revenue, previous_revenue],
-            marker=dict(color=['#1f77b4', '#ff7f0e']),
-            text=[format_currency(current_revenue), format_currency(previous_revenue)],
-            textposition='outside'
-        ))
-        
-        fig.update_layout(
-            title="Revenue Comparison",
-            xaxis_title="Year",
-            yaxis_title="Revenue"
-        )
-    
-    fig.update_layout(
-        showlegend=True,
-        hovermode='x unified',
-        plot_bgcolor='white',
-        xaxis=dict(showgrid=True, gridcolor='#f0f0f0'),
-        yaxis=dict(showgrid=True, gridcolor='#f0f0f0', tickformat='$,.0f'),
-        height=350,
-        margin=dict(t=50, b=50, l=50, r=50)
+        step = 100
+    ticks = [i * step for i in range(int(max_val / step) + 2)]
+    texts = []
+    for t in ticks:
+        if t >= 1_000_000:
+            texts.append(f"${t / 1_000_000:.1f}M")
+        elif t >= 1_000:
+            texts.append(f"${t / 1_000:.0f}K")
+        else:
+            texts.append(f"${t:.0f}")
+    return ticks, texts
+
+
+def blue_gradient(n: int) -> list[str]:
+    """Index 0 = darkest (highest value), last = lightest."""
+    return [
+        f"rgba(44, 95, 138, {1.0 - 0.65 * i / max(n - 1, 1):.2f})"
+        for i in range(n)
+    ]
+
+
+# ── Data (cached) ──────────────────────────────────────────────────────────────
+@st.cache_data
+def get_data(data_dir: str = "ecommerce_data"):
+    orders, order_items, products, customers, reviews, _ = load_data(data_dir)
+    sales = build_sales_data(orders, order_items)
+    return orders, products, customers, reviews, sales
+
+
+orders_df, products_df, customers_df, reviews_df, sales_all = get_data()
+
+# ── Header & filters ───────────────────────────────────────────────────────────
+col_title, col_year, col_month = st.columns([4, 1, 1])
+
+with col_title:
+    st.markdown("## E-Commerce Sales Dashboard")
+
+with col_year:
+    years = sorted(sales_all["year"].unique(), reverse=True)
+    default_year_idx = years.index(2023) if 2023 in years else 0
+    selected_year = st.selectbox("Year", years, index=default_year_idx)
+
+with col_month:
+    # "All" at index 0; month names at indices 1–12 map directly to month numbers
+    month_opts = ["All"] + [pd.Timestamp(2020, m, 1).strftime("%b") for m in range(1, 13)]
+    sel_month_label = st.selectbox("Month", month_opts, index=0)
+    selected_month = None if sel_month_label == "All" else month_opts.index(sel_month_label)
+
+comparison_year = selected_year - 1
+
+period_label = f"{sel_month_label} {selected_year}" if selected_month else str(selected_year)
+comp_label   = f"{sel_month_label} {comparison_year}" if selected_month else str(comparison_year)
+
+st.markdown(
+    f"<p style='color:#6b7280;font-size:13px;margin-top:-14px;'>"
+    f"Showing {period_label} — compared to {comp_label}</p>",
+    unsafe_allow_html=True,
+)
+
+# ── Filtered data ──────────────────────────────────────────────────────────────
+sales_cur = filter_by_period(sales_all, selected_year, selected_month)
+sales_pri = filter_by_period(sales_all, comparison_year, selected_month)
+
+# ── Metrics ────────────────────────────────────────────────────────────────────
+revenue_cur = calculate_revenue(sales_cur)
+revenue_pri = calculate_revenue(sales_pri)
+rev_growth  = calculate_revenue_growth(revenue_cur, revenue_pri)
+
+orders_cur  = calculate_total_orders(sales_cur)
+orders_pri  = calculate_total_orders(sales_pri)
+ord_growth  = calculate_revenue_growth(orders_cur, orders_pri)
+
+aov_cur     = calculate_avg_order_value(sales_cur)
+aov_pri     = calculate_avg_order_value(sales_pri)
+aov_growth  = calculate_revenue_growth(aov_cur, aov_pri)
+
+# MoM growth requires at least two months of data
+if selected_month is None:
+    mom_vals = calculate_monthly_growth(sales_cur).dropna()
+    mom_mean = mom_vals.mean() if len(mom_vals) > 0 else None
+else:
+    mom_mean = None
+
+delivery_cur = calculate_delivery_metrics(sales_cur, reviews_df)
+delivery_pri = calculate_delivery_metrics(sales_pri, reviews_df)
+avg_del_cur  = delivery_cur["delivery_days"].mean()
+avg_del_pri  = delivery_pri["delivery_days"].mean() if len(delivery_pri) > 0 else None
+del_growth   = calculate_revenue_growth(avg_del_cur, avg_del_pri)
+avg_rev_cur  = delivery_cur["review_score"].mean()
+
+# ── KPI Row ────────────────────────────────────────────────────────────────────
+def kpi_card(label: str, value: str, growth=None, inverted: bool = False) -> str:
+    delta = trend_html(growth, comp_label, inverted=inverted) if growth is not None else ""
+    return (
+        f'<div class="kpi-card">'
+        f'<div class="kpi-label">{label}</div>'
+        f'<div class="kpi-value">{value}</div>'
+        f'{delta}'
+        f'</div>'
     )
-    
-    return fig
 
 
-def create_category_chart(sales_data):
-    """Create top 10 categories bar chart"""
-    if 'product_category_name' not in sales_data.columns:
-        return go.Figure().add_annotation(
-            text="Product category data not available",
-            xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False
-        )
-    
-    category_revenue = sales_data.groupby('product_category_name')['price'].sum().sort_values(ascending=True).tail(10)
-    
-    fig = go.Figure(data=[
-        go.Bar(
-            y=category_revenue.index,
-            x=category_revenue.values,
-            orientation='h',
-            marker=dict(
-                color=category_revenue.values,
-                colorscale='Blues',
-                showscale=False
-            ),
-            text=[format_currency(x) for x in category_revenue.values],
-            textposition='outside',
-            hovertemplate='%{y}<br>Revenue: %{text}<extra></extra>'
-        )
-    ])
-    
-    fig.update_layout(
-        title="Top 10 Product Categories",
-        xaxis_title="Revenue",
-        yaxis_title="",
-        plot_bgcolor='white',
-        xaxis=dict(showgrid=True, gridcolor='#f0f0f0', tickformat='$,.0f'),
-        yaxis=dict(showgrid=False),
-        height=350,
-        margin=dict(t=50, b=50, l=150, r=50)
-    )
-    
-    return fig
+kc1, kc2, kc3, kc4 = st.columns(4)
+with kc1:
+    st.markdown(kpi_card("Total Revenue", fmt_currency(revenue_cur), rev_growth), unsafe_allow_html=True)
+with kc2:
+    st.markdown(kpi_card("Avg Monthly Growth", fmt_pct(mom_mean)), unsafe_allow_html=True)
+with kc3:
+    st.markdown(kpi_card("Avg Order Value", f"${aov_cur:,.0f}", aov_growth), unsafe_allow_html=True)
+with kc4:
+    st.markdown(kpi_card("Total Orders", f"{orders_cur:,}", ord_growth), unsafe_allow_html=True)
 
+# ── Chart Row 1 ────────────────────────────────────────────────────────────────
+row1_l, row1_r = st.columns(2)
 
-def create_state_map(sales_data):
-    """Create US choropleth map"""
-    if 'customer_state' not in sales_data.columns:
-        return go.Figure().add_annotation(
-            text="Geographic data not available",
-            xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False
-        )
-    
-    state_revenue = sales_data.groupby('customer_state')['price'].sum().reset_index()
-    state_revenue.columns = ['state', 'revenue']
-    
-    fig = go.Figure(data=go.Choropleth(
-        locations=state_revenue['state'],
-        z=state_revenue['revenue'],
-        locationmode='USA-states',
-        colorscale='Blues',
-        showscale=True,
-        colorbar=dict(title="Revenue", tickformat='$,.0f')
+with row1_l:
+    monthly_cur = calculate_monthly_revenue(sales_cur)
+    monthly_pri = calculate_monthly_revenue(sales_pri)
+    all_rev = list(monthly_cur.values) + (list(monthly_pri.values) if len(monthly_pri) else [])
+    yticks, ytexts = make_yticks(all_rev)
+
+    def mlabels(idx):
+        return [pd.Timestamp(2020, m, 1).strftime("%b") for m in idx]
+
+    fig_trend = go.Figure()
+    fig_trend.add_trace(go.Scatter(
+        x=mlabels(monthly_cur.index),
+        y=monthly_cur.values,
+        name=str(selected_year),
+        mode="lines+markers",
+        line=dict(color=C["primary"], width=2.5),
+        marker=dict(size=6, color=C["primary"]),
+        hovertemplate="%{x}: %{customdata}<extra></extra>",
+        customdata=[fmt_currency(v) for v in monthly_cur.values],
     ))
-    
-    fig.update_layout(
-        title="Revenue by State",
-        geo_scope='usa',
-        height=350,
-        margin=dict(t=50, b=50, l=50, r=50)
+    if len(monthly_pri) > 0:
+        fig_trend.add_trace(go.Scatter(
+            x=mlabels(monthly_pri.index),
+            y=monthly_pri.values,
+            name=str(comparison_year),
+            mode="lines+markers",
+            line=dict(color=C["light"], width=2, dash="dash"),
+            marker=dict(size=5, color=C["light"]),
+            hovertemplate="%{x}: %{customdata}<extra></extra>",
+            customdata=[fmt_currency(v) for v in monthly_pri.values],
+        ))
+    fig_trend.update_layout(
+        title=f"Monthly Revenue — {period_label} vs {comp_label}",
+        xaxis=dict(title="Month", showgrid=True, gridcolor=C["grid"]),
+        yaxis=dict(title="Revenue", showgrid=True, gridcolor=C["grid"],
+                   tickvals=yticks, ticktext=ytexts),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        **PLOT_BASE,
     )
-    
-    return fig
+    st.plotly_chart(fig_trend, use_container_width=True)
 
+with row1_r:
+    prod_sales = calculate_product_sales(sales_cur, products_df).head(10)
+    n = len(prod_sales)
+    yticks_c, ytexts_c = make_yticks(prod_sales.values.tolist())
 
-def create_satisfaction_delivery_chart(sales_data):
-    """Create satisfaction vs delivery time chart"""
-    if 'delivery_days' not in sales_data.columns or 'review_score' not in sales_data.columns:
-        return go.Figure().add_annotation(
-            text="Delivery or review data not available",
-            xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False
-        )
-    
-    # Categorize delivery days
-    def categorize_delivery(days):
-        if pd.isna(days):
-            return 'Unknown'
-        elif days <= 3:
-            return '1-3 days'
-        elif days <= 7:
-            return '4-7 days'
-        else:
-            return '8+ days'
-    
-    sales_data['delivery_category'] = sales_data['delivery_days'].apply(categorize_delivery)
-    
-    # Calculate average review score by delivery category
-    delivery_satisfaction = sales_data.groupby('delivery_category')['review_score'].mean().reset_index()
-    delivery_satisfaction = delivery_satisfaction[delivery_satisfaction['delivery_category'] != 'Unknown']
-    
-    # Order categories properly
-    category_order = ['1-3 days', '4-7 days', '8+ days']
-    delivery_satisfaction['delivery_category'] = pd.Categorical(
-        delivery_satisfaction['delivery_category'], 
-        categories=category_order, 
-        ordered=True
+    fig_cats = go.Figure(go.Bar(
+        x=prod_sales.index.tolist(),
+        y=prod_sales.values,
+        marker_color=blue_gradient(n),
+        hovertemplate="%{x}<br>Revenue: %{customdata}<extra></extra>",
+        customdata=[fmt_currency(v) for v in prod_sales.values],
+    ))
+    fig_cats.update_layout(
+        title=f"Top 10 Categories by Revenue ({period_label})",
+        xaxis=dict(title="", tickangle=-35, showgrid=False),
+        yaxis=dict(title="Revenue", showgrid=True, gridcolor=C["grid"],
+                   tickvals=yticks_c, ticktext=ytexts_c),
+        **PLOT_BASE,
     )
-    delivery_satisfaction = delivery_satisfaction.sort_values('delivery_category')
-    
-    fig = go.Figure(data=[
-        go.Bar(
-            x=delivery_satisfaction['delivery_category'],
-            y=delivery_satisfaction['review_score'],
-            marker=dict(color='#1f77b4'),
-            text=[f'{x:.2f}' for x in delivery_satisfaction['review_score']],
-            textposition='outside',
-        )
-    ])
-    
-    fig.update_layout(
-        title="Customer Satisfaction vs Delivery Time",
-        xaxis_title="Delivery Time",
-        yaxis_title="Average Review Score",
-        plot_bgcolor='white',
-        xaxis=dict(showgrid=False),
-        yaxis=dict(showgrid=True, gridcolor='#f0f0f0', range=[0, 5]),
-        height=350,
-        margin=dict(t=50, b=50, l=50, r=50)
+    st.plotly_chart(fig_cats, use_container_width=True)
+
+# ── Chart Row 2 ────────────────────────────────────────────────────────────────
+row2_l, row2_r = st.columns(2)
+
+with row2_l:
+    state_data = calculate_sales_by_state(sales_cur, orders_df, customers_df)
+    state_data["Revenue"] = state_data["price"].apply(fmt_currency)
+    yticks_m, ytexts_m = make_yticks(state_data["price"].tolist())
+
+    fig_map = px.choropleth(
+        state_data,
+        locations="customer_state",
+        color="price",
+        locationmode="USA-states",
+        scope="usa",
+        color_continuous_scale="Blues",
+        hover_name="customer_state",
+        hover_data={"price": False, "customer_state": False, "Revenue": True},
     )
-    
-    return fig
-
-
-def main():
-    """Main dashboard function"""
-    
-    # Load data
-    loader, processed_data = load_dashboard_data()
-    
-    if loader is None:
-        st.error("Failed to load data. Please check your data files.")
-        return
-    
-    # Header with title and date filters
-    col1, col2, col3 = st.columns([2, 1, 1])
-    
-    with col1:
-        st.title("📊 E-commerce Analytics Dashboard")
-    
-    with col2:
-        # Get available years from data
-        orders_data = processed_data['orders']
-        available_years = sorted(orders_data['purchase_year'].unique(), reverse=True)
-        
-        # Set default year to 2023 if available, otherwise use the first year
-        default_year_index = 0
-        if 2023 in available_years:
-            default_year_index = available_years.index(2023)
-        
-        selected_year = st.selectbox(
-            "Select Year",
-            options=available_years,
-            index=default_year_index,
-            key="year_filter"
-        )
-    
-    with col3:
-        # Month filter
-        month_options = ['All Months'] + [f'Month {i}' for i in range(1, 13)]
-        selected_month_display = st.selectbox(
-            "Select Month",
-            options=month_options,
-            index=0,
-            key="month_filter"
-        )
-        
-        # Convert display to actual month number
-        selected_month = None if selected_month_display == 'All Months' else int(selected_month_display.split(' ')[1])
-    
-    # Create datasets based on selected year and month
-    current_data = loader.create_sales_dataset(
-        year_filter=selected_year,
-        month_filter=selected_month,
-        status_filter='delivered'
+    fig_map.update_layout(
+        title=f"Revenue by State ({period_label})",
+        coloraxis_colorbar=dict(title="Revenue", tickvals=yticks_m,
+                                ticktext=ytexts_m, len=0.75),
+        margin=dict(l=0, r=0, t=52, b=0),
+        paper_bgcolor="white",
+        font=dict(family="sans-serif", size=12, color="#374151"),
     )
-    
-    previous_year = selected_year - 1
-    previous_data = None
-    if previous_year in available_years:
-        previous_data = loader.create_sales_dataset(
-            year_filter=previous_year,
-            month_filter=selected_month,
-            status_filter='delivered'
-        )
-    
-    # Calculate metrics
-    total_revenue = current_data['price'].sum()
-    total_orders = current_data['order_id'].nunique()
-    avg_order_value = current_data.groupby('order_id')['price'].sum().mean()
-    
-    # Calculate previous year metrics for trends
-    prev_revenue = previous_data['price'].sum() if previous_data is not None else 0
-    prev_orders = previous_data['order_id'].nunique() if previous_data is not None else 0
-    prev_aov = previous_data.groupby('order_id')['price'].sum().mean() if previous_data is not None else 0
-    
-    # Monthly growth calculation
-    monthly_data = current_data.groupby('purchase_month')['price'].sum()
-    monthly_growth = monthly_data.pct_change().mean() * 100 if len(monthly_data) > 1 else 0
-    
-    # KPI Row - 4 cards
-    st.markdown("### Key Performance Indicators")
-    
-    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    
-    with kpi1:
-        trend_html = format_trend(total_revenue, prev_revenue)
-        st.markdown(f"""
-        <div class="metric-card">
-            <p class="metric-label">Total Revenue</p>
-            <p class="metric-value">{format_currency(total_revenue)}</p>
-            <p class="metric-trend">{trend_html}</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with kpi2:
-        color_class = "trend-positive" if monthly_growth > 0 else "trend-negative"
-        arrow = "↗" if monthly_growth > 0 else "↘"
-        st.markdown(f"""
-        <div class="metric-card">
-            <p class="metric-label">Monthly Growth</p>
-            <p class="metric-value">{monthly_growth:.2f}%</p>
-            <p class="metric-trend"><span class="{color_class}">{arrow}</span></p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with kpi3:
-        trend_html = format_trend(avg_order_value, prev_aov)
-        st.markdown(f"""
-        <div class="metric-card">
-            <p class="metric-label">Average Order Value</p>
-            <p class="metric-value">{format_currency(avg_order_value)}</p>
-            <p class="metric-trend">{trend_html}</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with kpi4:
-        trend_html = format_trend(total_orders, prev_orders)
-        st.markdown(f"""
-        <div class="metric-card">
-            <p class="metric-label">Total Orders</p>
-            <p class="metric-value">{total_orders:,}</p>
-            <p class="metric-trend">{trend_html}</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    st.markdown("<br>", unsafe_allow_html=True)
-    
-    # Charts Grid - 2x2 layout
-    st.markdown("### Performance Analytics")
-    
-    chart_row1_col1, chart_row1_col2 = st.columns(2)
-    chart_row2_col1, chart_row2_col2 = st.columns(2)
-    
-    with chart_row1_col1:
-        revenue_fig = create_revenue_trend_chart(current_data, previous_data, selected_year, previous_year)
-        st.plotly_chart(revenue_fig, use_container_width=True)
-    
-    with chart_row1_col2:
-        category_fig = create_category_chart(current_data)
-        st.plotly_chart(category_fig, use_container_width=True)
-    
-    with chart_row2_col1:
-        map_fig = create_state_map(current_data)
-        st.plotly_chart(map_fig, use_container_width=True)
-    
-    with chart_row2_col2:
-        satisfaction_fig = create_satisfaction_delivery_chart(current_data)
-        st.plotly_chart(satisfaction_fig, use_container_width=True)
-    
-    st.markdown("<br>", unsafe_allow_html=True)
-    
-    # Bottom Row - 2 cards
-    st.markdown("### Customer Experience Metrics")
-    
-    bottom_col1, bottom_col2 = st.columns(2)
-    
-    with bottom_col1:
-        # Average delivery time
-        if 'delivery_days' in current_data.columns:
-            avg_delivery = current_data['delivery_days'].mean()
-            prev_delivery = previous_data['delivery_days'].mean() if previous_data is not None else 0
-            delivery_trend = format_trend(avg_delivery, prev_delivery)
-            
-            st.markdown(f"""
-            <div class="bottom-card">
-                <p class="metric-label">Average Delivery Time</p>
-                <p class="metric-value">{avg_delivery:.1f} days</p>
-                <p class="metric-trend">{delivery_trend}</p>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown("""
-            <div class="bottom-card">
-                <p class="metric-label">Average Delivery Time</p>
-                <p class="metric-value">N/A</p>
-                <p class="metric-trend">Data not available</p>
-            </div>
-            """, unsafe_allow_html=True)
-    
-    with bottom_col2:
-        # Review score
-        if 'review_score' in current_data.columns:
-            avg_review = current_data['review_score'].mean()
-            stars = "★" * int(round(avg_review))
-            
-            st.markdown(f"""
-            <div class="bottom-card">
-                <p class="metric-label">Average Review Score</p>
-                <p class="metric-value">{avg_review:.1f}/5.0</p>
-                <p class="stars">{stars}</p>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown("""
-            <div class="bottom-card">
-                <p class="metric-label">Average Review Score</p>
-                <p class="metric-value">N/A</p>
-                <p class="metric-trend">Data not available</p>
-            </div>
-            """, unsafe_allow_html=True)
+    st.plotly_chart(fig_map, use_container_width=True)
 
+with row2_r:
+    bucket_order = ["1-3 days", "4-7 days", "8+ days"]
+    rev_by_del = calculate_avg_review_by_delivery(delivery_cur)
+    rev_by_del["delivery_bucket"] = pd.Categorical(
+        rev_by_del["delivery_bucket"], categories=bucket_order, ordered=True
+    )
+    rev_by_del = rev_by_del.sort_values("delivery_bucket")
 
-if __name__ == "__main__":
-    main()
+    fig_del = go.Figure(go.Bar(
+        x=rev_by_del["delivery_bucket"].astype(str),
+        y=rev_by_del["review_score"],
+        marker_color=C["primary"],
+        width=0.45,
+        hovertemplate="%{x}<br>Avg Score: %{y:.2f}<extra></extra>",
+    ))
+    fig_del.update_layout(
+        title=f"Customer Satisfaction by Delivery Speed ({period_label})",
+        xaxis=dict(title="Delivery Time", showgrid=False),
+        yaxis=dict(title="Avg Review Score", showgrid=True, gridcolor=C["grid"],
+                   range=[0, 5], dtick=1),
+        **PLOT_BASE,
+    )
+    st.plotly_chart(fig_del, use_container_width=True)
+
+# ── Bottom Row ─────────────────────────────────────────────────────────────────
+bot_l, bot_r = st.columns(2)
+
+with bot_l:
+    del_delta = trend_html(del_growth, comp_label, inverted=True, css_class="bottom-delta")
+    avg_del_display = f"{avg_del_cur:.1f} days" if not pd.isna(avg_del_cur) else "N/A"
+    st.markdown(
+        f'<div class="bottom-card">'
+        f'<div class="bottom-label">Average Delivery Time</div>'
+        f'<div class="bottom-value">{avg_del_display}</div>'
+        f'{del_delta}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+with bot_r:
+    avg_rev_display = f"{avg_rev_cur:.2f}" if not pd.isna(avg_rev_cur) else "N/A"
+    st.markdown(
+        f'<div class="bottom-card">'
+        f'<div class="bottom-label">Customer Satisfaction</div>'
+        f'<div class="bottom-value">{avg_rev_display}</div>'
+        f'<div class="star-row">{star_rating(avg_rev_cur)}</div>'
+        f'<div class="bottom-subtitle">Average Review Score</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
